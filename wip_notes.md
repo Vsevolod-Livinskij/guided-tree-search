@@ -41,7 +41,7 @@ When testing optimization, we want to skip the instrumentation of the irrelevant
 parts, such as parser. To do that, we can use [partial instrumentation](https://github.com/AFLplusplus/AFLplusplus/blob/stable/instrumentation/README.instrument_list.md#3a-how-to-use-the-partial-instrumentation-mode).
 
 **TODO:**
-There is a lot of different (options for instrumentation)[https://github.com/AFLplusplus/AFLplusplus/blob/stable/instrumentation/README.llvm.md#3-options].
+There is a lot of different [options for instrumentation](https://github.com/AFLplusplus/AFLplusplus/blob/stable/instrumentation/README.llvm.md#3-options).
 [Link-time instrumentation](https://github.com/AFLplusplus/AFLplusplus/blob/stable/instrumentation/README.lto.md)
 looks like the most promising one, so we should start with it.
 
@@ -58,6 +58,60 @@ Work on afl-instrumented gcc.
 to analyze coverage results.
 Other alternatives are [afl-cov](https://github.com/axt/afl-cov) and 
 [AFL-Cast](https://github.com/cloudfuzz/AFL-Cast), but they look less polished.
+
+How to use afl-cov:
+1. Download [afl-cov](https://github.com/mrash/afl-cov)
+2. Build LLVM with gcov code coverage support:
+```shell
+CC=afl-clang-fast CXX=afl-clang-fast++ 
+AFL_LLVM_ALLOWLIST=/home/vlivinsk/workspace/llvm/afl-allow-list.txt 
+cmake -GNinja \
+      ../llvm_src_cov/llvm \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DLLVM_ENABLE_ASSERTIONS=ON \
+      -DLLVM_ENABLE_PROJECTS="llvm;clang" \
+      -DBUILTINS_CMAKE_ARGS=-DCOMPILER_RT_ENABLE_IOS=OFF \
+      -DLLVM_TARGETS_TO_BUILD=X86 \
+      -DCMAKE_CXX_FLAGS="-fprofile-arcs -ftest-coverage" \
+      -DCMAKE_C_FLAGS="-fprofile-arcs -ftest-coverage" \
+      -DCMAKE_LINK_FLAGS="-fprofile-arcs -ftest-coverage" \
+      -DCMAKE_EXE_LINKER_FLAGS="-fprofile-arcs -ftest-coverage" \
+      -DCMAKE_LD_FLAGS="-fprofile-arcs -ftest-coverage"
+ninja opt
+```
+We probabyl don't really need all of the `-fprofile-arcs -ftest-coverage` flags,
+but I'm not sure which ones are redundant.
+3. From the build folder, create `in` and `out` folders, pu initial seed in `in`.
+Essentially, perform all the steps that are necessary to run AFL.
+4. Run AFL with `afl-cov`:
+```shell
+FILEGUIDE_COMMENT_PREFIX=\;\  \
+FILEGUIDE_GENERATOR=/home/vlivinsk/workspace/alive2/build/quick-fuzz \
+AFL_SKIP_CPUFREQ=1 \
+AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+AFL_CUSTOM_MUTATOR_ONLY=1 \
+AFL_CUSTOM_MUTATOR_LIBRARY=$HOME/workspace/guided-tree-search/aflplusplus/guide-gen.so \
+~/workspace/afl-cov/afl-cov -d out/ --live --coverage-cmd "./bin/opt -O3 AFL_FILE" --code-dir . --ignore-core-pattern --coverage-at-exit
+```
+You can try to adjust when you want to collect the coverage information.
+relevant options are `--cover-corpus` and `--coverage-at-exit`. Per queue entry
+coverage looks like a bad idea, because it takes a really long time to collect
+the coverage information for `opt`.
+5. From the same directory, in a separate terminal, run `afl-fuzz` as usual:
+```shell
+AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+AFL_SKIP_CPUFREQ=1 \
+FILEGUIDE_COMMENT_PREFIX=\;\  \
+FILEGUIDE_GENERATOR=/home/vlivinsk/workspace/alive2/build/quick-fuzz \
+AFL_CUSTOM_MUTATOR_ONLY=1 \
+AFL_CUSTOM_MUTATOR_LIBRARY=$HOME/workspace/guided-tree-search/aflplusplus/guide-gen.so \
+afl-fuzz -i ./in -o out -- ~/workspace/llvm/build-cov/bin/opt -O3 @@
+```
+6. After AFL finishes or gets killed, `afl-cov` will generate a report in `out/` 
+
+It looks like `afl-cov` is a fancy wrapper around `gcov`, but that should be 
+enough for our purposes.
 
 #### Performance
 The performance of instrumented clang is roughly half of the performance of
@@ -93,3 +147,15 @@ results. Another is to use differential testing.
 **TODO:**
 We need to check if coverage information is propagated through bash scripts or
 fork-exec calls.
+
+Here is how to run it:
+```shell
+AFL_DEBUG_CHILD=1 \
+FILEGUIDE_COMMENT_PREFIX=\/\/\  \
+FILEGUIDE_GENERATOR=/home/vlivinsk/workspace/yarpgen/build/yarpgen \
+AFL_SKIP_CPUFREQ=1 \
+AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+AFL_CUSTOM_MUTATOR_ONLY=1 \
+AFL_CUSTOM_MUTATOR_LIBRARY=$HOME/workspace/guided-tree-search/aflplusplus/guide-gen.so \
+afl-fuzz -t 10000 -i ./in -o out -- ~/workspace/llvm/build-afl/bin/clang++ -O3 -x c++ -I/tmp -w -c @@
+```
