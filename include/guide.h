@@ -1078,6 +1078,7 @@ again:
   }
 
   assert(false);
+  return 0;
 }
 
 uint64_t FileChooser::choose(uint64_t Choices) { return nextVal() % Choices; }
